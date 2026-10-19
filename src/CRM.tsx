@@ -123,6 +123,7 @@ const fuentes: Record<
 > = {
   community: { label: "Community", color: "bg-green-600", icon: "💬" },
   Emanuel: { label: "Emanuel", color: "bg-violet-500", icon: "👤" },
+  fast_lead: { label: "Fast Lead", color: "bg-amber-500", icon: "⚡" },
   otro: { label: "Otro", color: "bg-gray-400", icon: "❓" },
 };
 
