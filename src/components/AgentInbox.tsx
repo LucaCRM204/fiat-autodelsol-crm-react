@@ -25,6 +25,8 @@ type Config = {
   dias_laborales: number[];
   max_runs_dia: number;
   tools_con_aprobacion: string[];
+  whatsapp_automatico: boolean;
+  max_acciones_corrida: number;
   instrucciones_extra: string;
 };
 
@@ -582,12 +584,27 @@ function Ajustes({ config, onGuardado }: { config: Config; onGuardado: (msg: str
             </label>
           ))}
         </div>
-        <p className="mt-2 text-xs text-slate-500">Los mensajes de WhatsApp a clientes siempre piden aprobación, en cualquier modo.</p>
+        <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-md border border-slate-200 p-3 text-sm">
+          <input
+            type="checkbox"
+            checked={f.whatsapp_automatico}
+            onChange={(e) => set('whatsapp_automatico', e.target.checked)}
+            className="mt-0.5 accent-blue-600"
+          />
+          <span>
+            <span className="font-medium text-slate-900">Mandar WhatsApp a clientes sin aprobación</span>
+            <span className="mt-0.5 block text-xs text-slate-500">
+              Solo en modo automático. Igual respeta: horario comercial, solo clientes que ya chatearon y uno cada 48 h por cliente.
+              Activalo cuando hayas aprobado varios y te gusten cómo salen.
+            </span>
+          </span>
+        </label>
       </fieldset>
 
       <div className="grid gap-5 sm:grid-cols-2">
         {num('sla_nuevo_min', 'Minutos para avisar un lead sin contactar', 'Si sigue igual el doble de tiempo después del aviso, propone reasignar.', 5, 1440)}
         {num('estancado_dias', 'Días sin movimiento para marcar estancado', 'Aplica a contactado, interesado, negociación y rellamado.', 1, 30)}
+        {num('max_acciones_corrida', 'Acciones máximas por análisis', 'Con 1 o 2 evita que proponga varias cosas parecidas sobre el mismo lead.', 1, 5)}
         {num('max_runs_dia', 'Tope de análisis por día', 'Controla el gasto de la API. Cada análisis suele usar entre 5 k y 20 k tokens.', 0, 5000)}
       </div>
 
