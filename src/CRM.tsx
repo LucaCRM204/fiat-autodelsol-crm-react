@@ -179,6 +179,7 @@ type LeadRow = {
   }>;
   notasInternas?: NotaInterna[]; // se cargan del backend al abrir el modal
   notasCount?: number; // cantidad guardada en la base (viene en GET /leads)
+  notasSinLeer?: number; // notas de otros que este usuario todavía no abrió
 };
 type Alert = {
   id: number; // > 0: guardada en la base · < 0: local (ranking)
@@ -601,6 +602,7 @@ const [equipoDestinoReasignacion, setEquipoDestinoReasignacion] = useState<strin
         historial: L.historial || [],
         created_by: L.created_by || null,
         notasCount: Number(L.notas_count) || 0,
+        notasSinLeer: Number(L.notas_sin_leer) || 0,
       }));
       setUsers(uu || []);
       setLeads(mappedLeads);
@@ -1282,14 +1284,16 @@ useEffect(() => {
     setLeadParaRecordatorios((p) => (p && p.id === leadId ? fn(p) : p));
   };
 
-  const cantNotas = (l: LeadRow) => l.notasInternas?.length ?? l.notasCount ?? 0;
+  // El botón 📝 muestra solo las notas nuevas de otros; al abrirlas se van
+  const cantNotas = (l: LeadRow) => l.notasSinLeer ?? 0;
 
   const abrirNotas = async (lead: LeadRow) => {
     setLeadParaNotas(lead); setShowNotasModal(true);
     try {
       const res = await api.get(`/notas/leads/${lead.id}/notas`);
       const notas = (res.data.notas || []).map(mapNotaApi);
-      actualizarLeadLocal(lead.id, (l) => ({ ...l, notasInternas: notas, notasCount: notas.length }));
+      actualizarLeadLocal(lead.id, (l) => ({ ...l, notasInternas: notas, notasCount: notas.length, notasSinLeer: 0 }));
+      api.post(`/notas/leads/${lead.id}/notas/leidas`).catch((e) => console.error("Error marcando notas leídas:", e));
     } catch (e) {
       console.error("Error cargando notas:", e);
     }
@@ -2041,6 +2045,7 @@ const getDashboardStats = (teamFilter?: string) => {
   created_at: L.created_at || null,  // AGREGAR ESTA LÍNEA
   last_status_change: L.last_status_change || null,
   ...(L.notas_count !== undefined ? { notasCount: Number(L.notas_count) || 0 } : {}),
+  ...(L.notas_sin_leer !== undefined ? { notasSinLeer: Number(L.notas_sin_leer) || 0 } : {}),
 });
 
   const addHistorialEntry = (leadId: number, estado: string) => {
