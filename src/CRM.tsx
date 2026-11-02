@@ -177,7 +177,8 @@ type LeadRow = {
     descripcion: string;
     completado: boolean;
   }>;
-  notasInternas?: NotaInterna[]; // NUEVO
+  notasInternas?: NotaInterna[]; // se cargan del backend al abrir el modal
+  notasCount?: number; // cantidad guardada en la base (viene en GET /leads)
 };
 type Alert = {
   id: number;
@@ -594,9 +595,11 @@ const [equipoDestinoReasignacion, setEquipoDestinoReasignacion] = useState<strin
         fuente: (L.fuente || "otro") as LeadRow["fuente"],
         historial: L.historial || [],
         created_by: L.created_by || null,
+        notasCount: Number(L.notas_count) || 0,
       }));
       setUsers(uu || []);
       setLeads(mappedLeads);
+      cargarRecordatoriosPendientes();
 
       // AGREGAR ESTO AQUÍ DENTRO
       try {
@@ -1249,8 +1252,89 @@ useEffect(() => {
     }
   };
 
-  // Función para agregar recordatorio
-  const handleAgregarRecordatorio = () => {
+  // ===== Notas internas y recordatorios: viven en el backend =====
+  const mapNotaApi = (n: any): NotaInterna => ({
+    id: n.id,
+    leadId: n.lead_id ?? n.leadId,
+    texto: n.texto,
+    usuario: n.usuario || "Usuario",
+    userId: n.user_id ?? n.userId,
+    timestamp: n.timestamp,
+  });
+
+  const mapRecordatorioApi = (r: any) => ({
+    id: r.id,
+    fecha: String(r.fecha).slice(0, 10),
+    hora: String(r.hora).slice(0, 5),
+    descripcion: r.descripcion,
+    completado: !!r.completado,
+  });
+
+  // Actualiza el lead en la lista y en el modal abierto (si es el mismo)
+  const actualizarLeadLocal = (leadId: number, fn: (l: LeadRow) => LeadRow) => {
+    setLeads((prev) => prev.map((l) => (l.id === leadId ? fn(l) : l)));
+    setLeadParaNotas((p) => (p && p.id === leadId ? fn(p) : p));
+    setLeadParaRecordatorios((p) => (p && p.id === leadId ? fn(p) : p));
+  };
+
+  const cantNotas = (l: LeadRow) => l.notasInternas?.length ?? l.notasCount ?? 0;
+
+  const abrirNotas = async (lead: LeadRow) => {
+    setLeadParaNotas(lead); setShowNotasModal(true);
+    try {
+      const res = await api.get(`/notas/leads/${lead.id}/notas`);
+      const notas = (res.data.notas || []).map(mapNotaApi);
+      actualizarLeadLocal(lead.id, (l) => ({ ...l, notasInternas: notas, notasCount: notas.length }));
+    } catch (e) {
+      console.error("Error cargando notas:", e);
+    }
+  };
+
+  const abrirRecordatorios = async (lead: LeadRow) => {
+    setLeadParaRecordatorios(lead); setShowRecordatoriosModal(true);
+    try {
+      const res = await api.get(`/recordatorios/leads/${lead.id}/recordatorios`);
+      const recs = (res.data.recordatorios || []).map(mapRecordatorioApi);
+      actualizarLeadLocal(lead.id, (l) => ({ ...l, recordatorios: recs }));
+    } catch (e) {
+      console.error("Error cargando recordatorios:", e);
+    }
+  };
+
+  // Notas automáticas (tareas, plantillas): se guardan sin bloquear la UI
+  const guardarNotaAuto = async (leadId: number, texto: string) => {
+    try {
+      const res = await api.post(`/notas/leads/${leadId}/notas`, { texto });
+      const nota = mapNotaApi(res.data.nota);
+      actualizarLeadLocal(leadId, (l) => ({
+        ...l,
+        notasInternas: l.notasInternas ? [...l.notasInternas, nota] : undefined,
+        notasCount: (l.notasCount || 0) + 1,
+      }));
+    } catch (e) {
+      console.error("Error guardando nota automática:", e);
+    }
+  };
+
+  // Recordatorios pendientes del usuario (propios y de sus leads, incluidos
+  // los del Agente IA): alimentan el calendario y las tareas
+  const cargarRecordatoriosPendientes = async () => {
+    try {
+      const res = await api.get("/recordatorios/recordatorios/pendientes");
+      const porLead = new Map<number, ReturnType<typeof mapRecordatorioApi>[]>();
+      for (const r of res.data.recordatorios || []) {
+        const lista = porLead.get(r.lead_id) || [];
+        lista.push(mapRecordatorioApi(r));
+        porLead.set(r.lead_id, lista);
+      }
+      setLeads((prev) => prev.map((l) => (porLead.has(l.id) ? { ...l, recordatorios: porLead.get(l.id) } : l)));
+    } catch (e) {
+      console.error("Error cargando recordatorios pendientes:", e);
+    }
+  };
+
+  // Función para agregar recordatorio (se guarda en el backend)
+  const handleAgregarRecordatorio = async () => {
     if (!leadParaRecordatorios) return;
 
     const fecha = (document.getElementById("recordatorio-fecha") as HTMLInputElement)?.value;
@@ -1262,40 +1346,35 @@ useEffect(() => {
       return;
     }
 
-    const nuevoRecordatorio = {
-      id: Date.now(),
-      fecha,
-      hora,
-      descripcion,
-      completado: false,
-    };
-
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === leadParaRecordatorios.id
-          ? {
-              ...l,
-              recordatorios: [...(l.recordatorios || []), nuevoRecordatorio],
-            }
-          : l
-      )
-    );
-
-    setShowAddRecordatorioModal(false);
-    alert("Recordatorio agregado exitosamente");
+    try {
+      const res = await api.post("/recordatorios/recordatorios", {
+        leadId: leadParaRecordatorios.id,
+        fecha,
+        hora,
+        descripcion,
+      });
+      const nuevo = mapRecordatorioApi(res.data.recordatorio);
+      actualizarLeadLocal(leadParaRecordatorios.id, (l) => ({
+        ...l,
+        recordatorios: [...(l.recordatorios || []), nuevo],
+      }));
+      setShowAddRecordatorioModal(false);
+    } catch (e) {
+      console.error("Error creando recordatorio:", e);
+      alert("No se pudo guardar el recordatorio. Probá de nuevo.");
+    }
   };
-const handleEliminarRecordatorio = (leadId: number, recordatorioId: number) => {
-  if (confirm("¿Eliminar este recordatorio?")) {
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === leadId
-          ? {
-              ...l,
-              recordatorios: l.recordatorios?.filter((r) => r.id !== recordatorioId),
-            }
-          : l
-      )
-    );
+const handleEliminarRecordatorio = async (leadId: number, recordatorioId: number) => {
+  if (!confirm("¿Eliminar este recordatorio?")) return;
+  try {
+    await api.delete(`/recordatorios/recordatorios/${recordatorioId}`);
+    actualizarLeadLocal(leadId, (l) => ({
+      ...l,
+      recordatorios: l.recordatorios?.filter((r) => r.id !== recordatorioId),
+    }));
+  } catch (e: any) {
+    console.error("Error eliminando recordatorio:", e);
+    alert(e?.response?.data?.error || "No se pudo eliminar el recordatorio");
   }
 };
 // Función para calcular cuotas
@@ -1326,21 +1405,27 @@ const generarPlanesCotizacion = (
   });
 };
 
-// Función para marcar recordatorio como completado
-const handleToggleRecordatorio = (leadId: number, recordatorioId: number) => {
-  setLeads((prev) =>
-    prev.map((l) =>
-      l.id === leadId
-        ? {
-            ...l,
-            recordatorios: l.recordatorios?.map((r) =>
-              r.id === recordatorioId ? { ...r, completado: !r.completado } : r
-            ),
-          }
-        : l
-    )
-  );
+// Función para marcar recordatorio como completado (se guarda en el backend)
+const handleToggleRecordatorio = async (leadId: number, recordatorioId: number) => {
+  const lead = leads.find((l) => l.id === leadId) || leadParaRecordatorios;
+  const actual = lead?.recordatorios?.find((r) => r.id === recordatorioId);
+  const completado = !actual?.completado;
+  actualizarLeadLocal(leadId, (l) => ({
+    ...l,
+    recordatorios: l.recordatorios?.map((r) => (r.id === recordatorioId ? { ...r, completado } : r)),
+  }));
+  try {
+    await api.put(`/recordatorios/recordatorios/${recordatorioId}`, { completado });
+  } catch (e) {
+    console.error("Error actualizando recordatorio:", e);
+    actualizarLeadLocal(leadId, (l) => ({
+      ...l,
+      recordatorios: l.recordatorios?.map((r) => (r.id === recordatorioId ? { ...r, completado: !completado } : r)),
+    }));
+    alert("No se pudo actualizar el recordatorio");
+  }
 };
+
 
 // Función para generar tareas automáticas basadas en el estado del lead
 const generarTareasAutomaticas = (leads: LeadRow[]): TareaSeguimiento[] => {
@@ -1555,25 +1640,7 @@ const handleAsignarTareaAVendedor = () => {
     `📋 Nueva tarea asignada por ${currentUser?.name}: ${descripcion.substring(0, 50)}...`
   );
 
-  const notaAuto: NotaInterna = {
-    id: Date.now() + 1,
-    leadId: leadParaAsignarTarea.id,
-    texto: `📋 ${currentUser?.name} asignó tarea a ${vendedor?.name}: ${descripcion}`,
-    usuario: currentUser?.name || 'Sistema',
-    userId: currentUser?.id || 0,
-    timestamp: new Date().toISOString(),
-  };
-
-  setLeads(prev =>
-    prev.map(l =>
-      l.id === leadParaAsignarTarea.id
-        ? {
-            ...l,
-            notasInternas: [...(l.notasInternas || []), notaAuto],
-          }
-        : l
-    )
-  );
+  guardarNotaAuto(leadParaAsignarTarea.id, `📋 ${currentUser?.name} asignó tarea a ${vendedor?.name}: ${descripcion}`);
 
   setShowAsignarTareaModal(false);
   setLeadParaAsignarTarea(null);
@@ -1927,6 +1994,7 @@ const getDashboardStats = (teamFilter?: string) => {
   created_by: L.created_by || null,
   created_at: L.created_at || null,  // AGREGAR ESTA LÍNEA
   last_status_change: L.last_status_change || null,
+  ...(L.notas_count !== undefined ? { notasCount: Number(L.notas_count) || 0 } : {}),
 });
 
   const addHistorialEntry = (leadId: number, estado: string) => {
@@ -2198,7 +2266,8 @@ const handleReasignacionMasiva = async () => {
       listLeads(),
     ]);
     setUsers(usersData);
-    setLeads(leadsData as LeadRow[]);
+    setLeads((leadsData || []).map(mapLeadFromApi));
+    cargarRecordatoriosPendientes();
     
     // Limpiar selección
     setSelectedLeads(new Set());
@@ -2404,55 +2473,45 @@ const handleReasignacionMasiva = async () => {
   };
 // Agregar estas funciones antes del return final
 
-const handleAgregarNota = () => {
+const handleAgregarNota = async () => {
   if (!leadParaNotas || !currentUser) return;
 
-  const textoNota = (document.getElementById("nueva-nota-interna") as HTMLTextAreaElement)?.value?.trim();
-  
+  const textarea = document.getElementById("nueva-nota-interna") as HTMLTextAreaElement | null;
+  const textoNota = textarea?.value?.trim();
+
   if (!textoNota) {
     alert("Escribe algo en la nota");
     return;
   }
 
-  const nuevaNota: NotaInterna = {
-    id: Date.now(),
-    leadId: leadParaNotas.id,
-    texto: textoNota,
-    usuario: currentUser.name,
-    userId: currentUser.id,
-    timestamp: new Date().toISOString(),
-  };
-
-  setLeads((prev) =>
-    prev.map((l) =>
-      l.id === leadParaNotas.id
-        ? {
-            ...l,
-            notasInternas: [...(l.notasInternas || []), nuevaNota],
-          }
-        : l
-    )
-  );
-
-  // Limpiar textarea
-  (document.getElementById("nueva-nota-interna") as HTMLTextAreaElement).value = "";
-  
-  alert("Nota agregada exitosamente");
+  try {
+    const res = await api.post(`/notas/leads/${leadParaNotas.id}/notas`, { texto: textoNota });
+    const nueva = mapNotaApi(res.data.nota);
+    actualizarLeadLocal(leadParaNotas.id, (l) => ({
+      ...l,
+      notasInternas: [...(l.notasInternas || []), nueva],
+      notasCount: (l.notasCount || 0) + 1,
+    }));
+    if (textarea) textarea.value = "";
+  } catch (e) {
+    console.error("Error guardando nota:", e);
+    alert("No se pudo guardar la nota. Probá de nuevo.");
+  }
 };
 
-const handleEliminarNota = (leadId: number, notaId: number) => {
+const handleEliminarNota = async (leadId: number, notaId: number) => {
   if (!confirm("¿Eliminar esta nota interna?")) return;
-
-  setLeads((prev) =>
-    prev.map((l) =>
-      l.id === leadId
-        ? {
-            ...l,
-            notasInternas: l.notasInternas?.filter((n) => n.id !== notaId),
-          }
-        : l
-    )
-  );
+  try {
+    await api.delete(`/notas/notas/${notaId}`);
+    actualizarLeadLocal(leadId, (l) => ({
+      ...l,
+      notasInternas: l.notasInternas?.filter((n) => n.id !== notaId),
+      notasCount: Math.max(0, (l.notasCount || 1) - 1),
+    }));
+  } catch (e: any) {
+    console.error("Error eliminando nota:", e);
+    alert(e?.response?.data?.error || "No se pudo eliminar la nota");
+  }
 };
 
 // Función para calcular meta del mes actual
@@ -3335,17 +3394,14 @@ const getProgresoMes = (vendedor_id: number) => {
 <button
   onClick={(e) => {
     e.stopPropagation();
-    setLeadParaNotas(lead);
-    setShowNotasModal(true);
+    abrirNotas(lead);
   }}
   className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200 flex items-center space-x-1"
   title="Notas internas del equipo"
 >
   <span>📝</span>
   <span className="hidden sm:inline">
-    {lead.notasInternas && lead.notasInternas.length > 0 
-      ? `(${lead.notasInternas.length})` 
-      : ''}
+    {cantNotas(lead) > 0 ? `(${cantNotas(lead)})` : ''}
   </span>
 </button>
  <button
@@ -3376,8 +3432,7 @@ const getProgresoMes = (vendedor_id: number) => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              setLeadParaRecordatorios(lead);
-                              setShowRecordatoriosModal(true);
+                              abrirRecordatorios(lead);
                             }}
                             className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200 flex items-center space-x-1"
                             title="Ver recordatorios"
@@ -4096,13 +4151,12 @@ const getProgresoMes = (vendedor_id: number) => {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            setLeadParaNotas(lead);
-                            setShowNotasModal(true);
+                            abrirNotas(lead);
                           }}
                           className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
                           title="Notas internas del equipo"
                         >
-                          📝{lead.notasInternas && lead.notasInternas.length > 0 ? `(${lead.notasInternas.length})` : ''}
+                          📝{cantNotas(lead) > 0 ? `(${cantNotas(lead)})` : ''}
                         </button>
 
                         {/* Cotizar */}
@@ -5076,17 +5130,14 @@ const getProgresoMes = (vendedor_id: number) => {
 <button
   onClick={(e) => {
     e.stopPropagation();
-    setLeadParaNotas(lead);
-    setShowNotasModal(true);
+    abrirNotas(lead);
   }}
   className="px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200 flex items-center space-x-1"
   title="Notas internas del equipo"
 >
   <span>📝</span>
   <span className="hidden sm:inline">
-    {lead.notasInternas && lead.notasInternas.length > 0 
-      ? `(${lead.notasInternas.length})` 
-      : ''}
+    {cantNotas(lead) > 0 ? `(${cantNotas(lead)})` : ''}
   </span>
 </button>
  <button
@@ -9090,7 +9141,7 @@ const getProgresoMes = (vendedor_id: number) => {
                       <div className="flex-1">
                         <div className="flex items-center space-x-2 mb-1">
                           <span className={`font-medium ${recordatorio.completado ? "line-through text-gray-500" : "text-gray-900"}`}>
-                            {new Date(recordatorio.fecha).toLocaleDateString("es-AR", {
+                            {new Date(`${recordatorio.fecha}T12:00:00`).toLocaleDateString("es-AR", {
                               weekday: "long",
                               day: "2-digit",
                               month: "long",
@@ -9570,26 +9621,8 @@ mensaje += `   Total: $${(plan.valorCuota * plan.cuotas).toLocaleString('es-AR')
                 const whatsappUrl = `https://wa.me/${phoneNumber}?text=${encodeURIComponent(mensaje)}`;
                 window.open(whatsappUrl, '_blank');
                 
-                // Agregar nota interna automática
-                const notaAuto: NotaInterna = {
-                  id: Date.now(),
-                  leadId: leadParaWhatsApp.id,
-                  texto: `Envió plantilla "${plantilla.nombre}" por WhatsApp`,
-                  usuario: currentUser?.name || 'Sistema',
-                  userId: currentUser?.id || 0,
-                  timestamp: new Date().toISOString(),
-                };
-                
-                setLeads((prev) =>
-                  prev.map((l) =>
-                    l.id === leadParaWhatsApp.id
-                      ? {
-                          ...l,
-                          notasInternas: [...(l.notasInternas || []), notaAuto],
-                        }
-                      : l
-                  )
-                );
+                // Nota interna automática (se guarda en el backend)
+                guardarNotaAuto(leadParaWhatsApp.id, `Envió plantilla "${plantilla.nombre}" por WhatsApp`);
                 
                 setShowPlantillasModal(false);
                 setLeadParaWhatsApp(null);
