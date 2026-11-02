@@ -102,6 +102,7 @@ const DISPAROS: Record<string, string> = {
   'lead.sla_nuevo': 'Sin contactar',
   'lead.no_contesta': 'No contesta',
   'lead.estancado': 'Estancado',
+  'lead.respondio': 'Respondió WhatsApp',
   manual: 'Pedido manual',
 };
 
@@ -128,6 +129,8 @@ function describir(a: Accion): string {
       return `Pasar a “${x.estado}”${a.lead_estado ? ` (hoy: ${a.lead_estado})` : ''}. ${x.motivo ?? ''}`;
     case 'reassign_lead':
       return `Reasignar de ${a.vendedor_nombre ?? 'sin vendedor'} a ${a.usuario_destino ?? `#${x.to_user_id}`}. ${x.motivo ?? ''}`;
+    case 'send_whatsapp':
+      return `WhatsApp al cliente: “${x.mensaje ?? ''}”`;
     default:
       return `${a.tool} ${JSON.stringify(x)}`;
   }
@@ -579,6 +582,7 @@ function Ajustes({ config, onGuardado }: { config: Config; onGuardado: (msg: str
             </label>
           ))}
         </div>
+        <p className="mt-2 text-xs text-slate-500">Los mensajes de WhatsApp a clientes siempre piden aprobación, en cualquier modo.</p>
       </fieldset>
 
       <div className="grid gap-5 sm:grid-cols-2">
