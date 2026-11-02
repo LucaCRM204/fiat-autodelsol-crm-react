@@ -56,6 +56,7 @@ import WhatsAppPanel from './components/WhatsAppPanel';
 import LeadDistribution from './components/DistribucionLeads';
 import CallPanel from './components/CallPanel';
 import AgentInbox from './components/AgentInbox';
+import MisTareas from './components/MisTareas';
 import {
   listMetas,
   createMeta as apiCreateMeta,
@@ -238,6 +239,7 @@ type TareaSeguimiento = {
   manual?: boolean;
   createdBy?: number; // Quién creó la tarea
   createdByName?: string; // Nombre de quien creó
+  recordatorioId?: number; // si sale de un recordatorio: completarla lo marca hecho en la base
 };
 // Tipo para Metas
 
@@ -1549,6 +1551,7 @@ const generarTareasAutomaticas = (leads: LeadRow[]): TareaSeguimiento[] => {
               fechaLimite: fechaRecordatorio.toISOString(),
               descripcion: recordatorio.descripcion,
               completada: false,
+              recordatorioId: recordatorio.id,
               lead
             });
           }
@@ -2718,7 +2721,7 @@ const getProgresoMes = (vendedor_id: number) => {
     return [
       { key: "dashboard", label: "Dashboard", Icon: Home },
     { key: "leads", label: "Leads", Icon: Users },
-    { key: "tareas", label: "Mis Tareas", Icon: Bell, badge: tareasPendientes.filter(t => !t.completada && t.prioridad === 'alta').length },
+    { key: "tareas", label: "Mis Tareas", Icon: Bell, badge: tareasPendientes.filter(t => !t.completada && t.prioridad === 'alta' && (currentUser?.role !== 'vendedor' || t.asignadoA === currentUser?.id)).length },
     { key: "calendar", label: "Calendario", Icon: Calendar },
     { key: "ranking", label: "Ranking", Icon: Trophy },
     
@@ -6293,6 +6296,19 @@ const getProgresoMes = (vendedor_id: number) => {
       title="WhatsApp Admin — Auto del Sol Fiat"
     />
   </div>
+)}
+    {/* Mis Tareas */}
+{activeSection === "tareas" && (
+  <MisTareas
+    tareas={tareasPendientes}
+    currentUser={currentUser}
+    nombreUsuario={(id: number) => userById.get(id)?.name || `Usuario #${id}`}
+    estados={estados}
+    onCompletarManual={completarTarea}
+    onCompletarRecordatorio={handleToggleRecordatorio}
+    onAbrirNotas={abrirNotas}
+    onAbrirHistorial={openHistorialModal}
+  />
 )}
     {/* Agente IA */}
 {activeSection === "agente" && (isOwner() || ["director", "gerente"].includes(currentUser?.role)) && (
