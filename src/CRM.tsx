@@ -181,12 +181,13 @@ type LeadRow = {
   notasCount?: number; // cantidad guardada en la base (viene en GET /leads)
 };
 type Alert = {
-  id: number;
+  id: number; // > 0: guardada en la base · < 0: local (ranking)
   userId: number;
-  type: "lead_assigned" | "ranking_change";
+  type: "lead_assigned" | "ranking_change" | "recordatorio" | "tarea" | string;
   message: string;
   ts: string;
   read: boolean;
+  leadNombre?: string | null;
 };
 type Presupuesto = {
   id: number;
@@ -523,7 +524,8 @@ const [equipoDestinoReasignacion, setEquipoDestinoReasignacion] = useState<strin
     fuente: (L.fuente || "otro") as LeadRow["fuente"],
     historial: L.historial || [],
     created_by: L.created_by || null,
-    recordatorios: L.recordatorios || [],
+    // Si el evento no trae recordatorios, no se pisan los que ya están cargados
+    ...(L.recordatorios ? { recordatorios: L.recordatorios } : {}),
   });
 
   const {
@@ -547,6 +549,9 @@ const [equipoDestinoReasignacion, setEquipoDestinoReasignacion] = useState<strin
     },
     onLeadDeleted: (leadId: number) => {
       setLeads(prev => prev.filter(l => l.id !== leadId));
+    },
+    onNotification: (n: any) => {
+      if (!n?.targetUserId || n.targetUserId === currentUser?.id) cargarAlertas();
     },
   });
 
@@ -1757,22 +1762,63 @@ const handleAsignarTareaAVendedor = () => {
     return id;
   };
 
-  // ===== Alertas (locales de UI) =====
-   const [alerts, setAlerts] = useState<Alert[]>([]);
-  const nextAlertId = useRef(1);
-const pushAlert = (userId: number, type: Alert["type"], message: string) => {
-  setAlerts((prev) => [
-    ...prev,
-    {
-      id: nextAlertId.current++,
-      userId,
-      type,
-      message,
-      ts: new Date().toISOString(),
-      read: false,
-    },
-  ]);
-};
+  // ===== Alertas: se guardan en la base (tabla alertas) =====
+  // Las de ranking se calculan en cada navegador, así que quedan locales
+  // (si se guardaran, cada usuario conectado generaría la misma alerta).
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const nextAlertId = useRef(-1);
+
+  const cargarAlertas = async () => {
+    try {
+      const res = await api.get("/alertas", { params: { limit: 50 } });
+      const mapped: Alert[] = (res.data.alertas || []).map((a: any) => ({
+        id: a.id,
+        userId: a.user_id,
+        type: a.type,
+        message: a.message,
+        ts: a.timestamp,
+        read: !!a.is_read,
+        leadNombre: a.lead_nombre || null,
+      }));
+      setAlerts((prev) => [...mapped, ...prev.filter((a) => a.id < 0)]);
+    } catch (e) {
+      console.error("Error cargando alertas:", e);
+    }
+  };
+
+  const pushAlert = (userId: number, type: Alert["type"], message: string) => {
+    if (type === "ranking_change") {
+      if (userId !== currentUser?.id) return;
+      setAlerts((prev) => [
+        ...prev,
+        { id: nextAlertId.current--, userId, type, message, ts: new Date().toISOString(), read: false },
+      ]);
+      return;
+    }
+    api
+      .post("/alertas", { userId, type, message })
+      .then(() => { if (userId === currentUser?.id) cargarAlertas(); })
+      .catch((e) => console.error("Error guardando alerta:", e));
+  };
+
+  const marcarAlertaLeida = (id: number) => {
+    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, read: true } : a)));
+    if (id > 0) api.put(`/alertas/${id}/leer`).catch((e) => console.error("Error marcando alerta:", e));
+  };
+
+  const marcarTodasLeidas = () => {
+    setAlerts((prev) => prev.map((a) => (a.userId === currentUser?.id ? { ...a, read: true } : a)));
+    api.put("/alertas/leer-todas").catch((e) => console.error("Error marcando alertas:", e));
+  };
+
+  // Alertas del backend (Agente IA, recordatorios vencidos, asignaciones):
+  // al entrar, cada minuto y cuando llega una notificación en tiempo real
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    cargarAlertas();
+    const t = setInterval(cargarAlertas, 60 * 1000);
+    return () => clearInterval(t);
+  }, [currentUser?.id]);
 const pushAlertToChain = (
   vendorId: number,
   type: Alert["type"],
@@ -4778,10 +4824,17 @@ const getProgresoMes = (vendedor_id: number) => {
                         <div className="flex items-start justify-between">
                           <div className="flex items-start space-x-3 flex-1">
                             <div className={`mt-1 ${
-                              alert.type === "lead_assigned" ? "text-green-600" : "text-orange-600"
+                              alert.type === "lead_assigned" ? "text-green-600"
+                                : alert.type === "recordatorio" ? "text-blue-600"
+                                : alert.type === "tarea" ? "text-purple-600"
+                                : "text-orange-600"
                             }`}>
                               {alert.type === "lead_assigned" ? (
                                 <UserCheck size={20} />
+                              ) : alert.type === "recordatorio" ? (
+                                <Calendar size={20} />
+                              ) : alert.type === "tarea" ? (
+                                <Bell size={20} />
                               ) : (
                                 <Trophy size={20} />
                               )}
@@ -4792,6 +4845,9 @@ const getProgresoMes = (vendedor_id: number) => {
                               }`}>
                                 {alert.message}
                               </p>
+                              {alert.leadNombre && !alert.message.includes(alert.leadNombre) && (
+                                <p className="text-xs text-gray-600 mt-0.5">Lead: {alert.leadNombre}</p>
+                              )}
                               <p className="text-xs text-gray-500 mt-1">
                                 {new Date(alert.ts).toLocaleString("es-AR", {
                                   day: '2-digit',
@@ -4806,13 +4862,7 @@ const getProgresoMes = (vendedor_id: number) => {
                           <div className="flex items-center space-x-2 ml-3">
                             {!alert.read && (
                               <button
-                                onClick={() => {
-                                  setAlerts(prev =>
-                                    prev.map(a =>
-                                      a.id === alert.id ? { ...a, read: true } : a
-                                    )
-                                  );
-                                }}
+                                onClick={() => marcarAlertaLeida(alert.id)}
                                 className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
                               >
                                 ✓ Marcar leída
@@ -4829,13 +4879,7 @@ const getProgresoMes = (vendedor_id: number) => {
               {alerts.filter(a => a.userId === currentUser?.id && !a.read).length > 0 && (
                 <div className="mt-4 flex justify-end">
                   <button
-                    onClick={() => {
-                      setAlerts(prev =>
-                        prev.map(a =>
-                          a.userId === currentUser?.id ? { ...a, read: true } : a
-                        )
-                      );
-                    }}
+                    onClick={marcarTodasLeidas}
                     className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
                   >
                     ✓ Marcar todas como leídas
