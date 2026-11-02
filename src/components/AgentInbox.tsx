@@ -11,7 +11,7 @@
  * - Ajustes (owner/director): modo, SLA, horario, tope diario, instrucciones.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bot, Check, X, RefreshCw, Clock, AlertTriangle, Send } from 'lucide-react';
+import { Bot, Check, X, RefreshCw, Clock, AlertTriangle, Send, Search, CheckCircle2, XCircle } from 'lucide-react';
 import { api } from '../api';
 
 type Modo = 'off' | 'shadow' | 'auto';
@@ -61,6 +61,7 @@ type Accion = {
   decidido_por: string | null;
   decision_note: string | null;
   created_at: string;
+  executed_at?: string | null;
   lead_nombre: string | null;
   lead_estado: string | null;
   lead_modelo: string | null;
@@ -83,7 +84,18 @@ type Corrida = {
   created_at: string;
 };
 
-type Props = { currentUser: { id: number; role: string; name?: string } | null };
+type Props = {
+  currentUser: { id: number; role: string; name?: string } | null;
+  /** Abre el lead en el CRM (historial). Lo pasa CRM.tsx. */
+  onAbrirLead?: (leadId: number) => boolean | void;
+};
+
+type Evidencia = {
+  accion: Accion;
+  lead: { id: number; nombre: string; telefono: string; modelo: string; estado: string; vendedor: string | null } | null;
+  evidencia: { tipo: string; encontrado: boolean; detalle: string | null; fecha: string | null }[];
+  aviso?: string;
+};
 
 const MODOS: { key: Modo; label: string; detalle: string }[] = [
   { key: 'off', label: 'Apagado', detalle: 'No analiza ni propone nada.' },
@@ -149,7 +161,7 @@ function hace(iso: string): string {
 
 const errorDe = (e: any, fallback: string) => e?.response?.data?.error || fallback;
 
-export default function AgentInbox({ currentUser }: Props) {
+export default function AgentInbox({ currentUser, onAbrirLead }: Props) {
   const puedeConfigurar = ['owner', 'director'].includes(currentUser?.role ?? '');
 
   const [tab, setTab] = useState<'pendientes' | 'historial' | 'corridas' | 'ajustes'>('pendientes');
@@ -161,6 +173,7 @@ export default function AgentInbox({ currentUser }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [trabajando, setTrabajando] = useState<number | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  const [comprobando, setComprobando] = useState<number | null>(null);
 
   const cargar = useCallback(async (silencioso = false) => {
     if (!silencioso) setCargando(true);
@@ -320,13 +333,33 @@ export default function AgentInbox({ currentUser }: Props) {
           {tab === 'pendientes' && (
             <Pendientes acciones={pendientes} trabajando={trabajando} onDecidir={decidir} />
           )}
-          {tab === 'historial' && <Historial acciones={historial} />}
-          {tab === 'corridas' && <Corridas corridas={corridas} onPedido={() => { setAviso('Revisión en cola: aparece en Análisis en unos segundos'); cargar(true); }} modoOff={status?.config.mode === 'off'} />}
+          {tab === 'historial' && <Historial acciones={historial} onComprobar={setComprobando} />}
+          {tab === 'corridas' && (
+            <Corridas
+              corridas={corridas}
+              acciones={[...pendientes, ...historial]}
+              onComprobar={setComprobando}
+              onPedido={() => { setAviso('Revisión en cola: aparece en Análisis en unos segundos'); cargar(true); }}
+              modoOff={status?.config.mode === 'off'}
+            />
+          )}
           {tab === 'ajustes' && puedeConfigurar && status && (
             <Ajustes config={status.config} onGuardado={(msg) => { setAviso(msg); cargar(true); }} />
           )}
         </div>
       </div>
+
+      {comprobando !== null && (
+        <ModalEvidencia
+          accionId={comprobando}
+          onCerrar={() => setComprobando(null)}
+          onAbrirLead={onAbrirLead ? (id) => {
+            const ok = onAbrirLead(id);
+            if (ok === false) setAviso('Ese lead no está en tu lista cargada. Buscalo por nombre en Leads.');
+            else setComprobando(null);
+          } : undefined}
+        />
+      )}
 
       {aviso && (
         <div role="status" className="fixed bottom-6 right-6 z-50 rounded-lg bg-slate-900 px-4 py-3 text-sm text-white shadow-xl">
@@ -393,7 +426,7 @@ function Pendientes({
   );
 }
 
-function Historial({ acciones }: { acciones: Accion[] }) {
+function Historial({ acciones, onComprobar }: { acciones: Accion[]; onComprobar: (id: number) => void }) {
   if (!acciones.length) {
     return <p className="py-10 text-center text-sm text-slate-400">Todavía no hay acciones resueltas.</p>;
   }
@@ -408,6 +441,14 @@ function Historial({ acciones }: { acciones: Accion[] }) {
               <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${e.cls}`}>{e.label}</span>
               <span className="font-medium text-slate-900">{a.lead_nombre ?? 'Lead eliminado'}</span>
               <span className="text-xs text-slate-400">{hace(a.created_at)}</span>
+              {(a.status === 'executed' || a.status === 'approved') && (
+                <button
+                  onClick={() => onComprobar(a.id)}
+                  className="ml-auto inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <Search size={12} /> Comprobar
+                </button>
+              )}
             </div>
             <p className="mt-1 text-sm text-slate-700">{describir(a)}</p>
             {err && <p className="mt-1 text-xs text-red-600">{err}</p>}
@@ -424,7 +465,19 @@ function Historial({ acciones }: { acciones: Accion[] }) {
   );
 }
 
-function Corridas({ corridas, onPedido, modoOff }: { corridas: Corrida[]; onPedido: () => void; modoOff: boolean }) {
+function Corridas({
+  corridas,
+  acciones,
+  onComprobar,
+  onPedido,
+  modoOff,
+}: {
+  corridas: Corrida[];
+  acciones: Accion[];
+  onComprobar: (id: number) => void;
+  onPedido: () => void;
+  modoOff: boolean;
+}) {
   const [leadId, setLeadId] = useState('');
   const [instruccion, setInstruccion] = useState('');
   const [enviando, setEnviando] = useState(false);
@@ -499,6 +552,24 @@ function Corridas({ corridas, onPedido, modoOff }: { corridas: Corrida[]; onPedi
               ) : (
                 <p className="mt-1 text-sm text-slate-700">{c.summary}</p>
               )}
+              {acciones.filter((a) => a.run_id === c.id).map((a) => {
+                const e = ESTADO_ACCION[a.status];
+                const hecha = a.status === 'executed' || a.status === 'approved';
+                return (
+                  <div key={a.id} className="mt-2 flex items-start gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${e.cls}`}>{e.label}</span>
+                    <span className="min-w-0 flex-1 text-slate-700">{describir(a)}</span>
+                    {hecha && (
+                      <button
+                        onClick={() => onComprobar(a.id)}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        <Search size={12} /> Comprobar
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </li>
           ))}
         </ul>
@@ -654,6 +725,109 @@ function Ajustes({ config, onGuardado }: { config: Config; onGuardado: (msg: str
       >
         {guardando ? 'Guardando…' : 'Guardar ajustes'}
       </button>
+    </div>
+  );
+}
+
+function ModalEvidencia({
+  accionId,
+  onCerrar,
+  onAbrirLead,
+}: {
+  accionId: number;
+  onCerrar: () => void;
+  onAbrirLead?: (leadId: number) => void;
+}) {
+  const [data, setData] = useState<Evidencia | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    api.get(`/agent/actions/${accionId}/evidencia`)
+      .then((r) => vivo && setData(r.data))
+      .catch((e) => vivo && setErr(errorDe(e, 'No se pudo verificar la acción')));
+    return () => { vivo = false; };
+  }, [accionId]);
+
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onCerrar();
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [onCerrar]);
+
+  const fecha = (f: string | null) =>
+    f ? new Date(f).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onCerrar}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="evidencia-titulo"
+        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <h2 id="evidencia-titulo" className="text-lg font-semibold text-slate-900">Qué quedó registrado</h2>
+          <button onClick={onCerrar} aria-label="Cerrar" className="text-slate-400 hover:text-slate-700">
+            <X size={20} />
+          </button>
+        </div>
+
+        {!data && !err && <p className="mt-4 text-sm text-slate-500">Buscando en el CRM…</p>}
+        {err && <p className="mt-4 text-sm text-red-600">{err}</p>}
+
+        {data && (
+          <div className="mt-4 space-y-4">
+            <div className="rounded-lg bg-slate-50 p-3 text-sm">
+              <p className="text-slate-800">{describir(data.accion)}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {data.accion.executed_at ? `Ejecutada ${fecha(data.accion.executed_at)}` : `Propuesta ${fecha(data.accion.created_at)}`}
+                {data.accion.decidido_por ? ` · aprobó ${data.accion.decidido_por}` : ' · automática'}
+              </p>
+            </div>
+
+            {data.aviso ? (
+              <p className="text-sm text-amber-700">{data.aviso}</p>
+            ) : (
+              <ul className="space-y-2">
+                {data.evidencia.map((ev, i) => (
+                  <li key={i} className="flex gap-2 text-sm">
+                    {ev.encontrado
+                      ? <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-emerald-600" />
+                      : <XCircle size={18} className="mt-0.5 shrink-0 text-red-500" />}
+                    <div className="min-w-0">
+                      <p className="font-medium text-slate-900">{ev.tipo}</p>
+                      <p className="break-words text-slate-600">
+                        {ev.encontrado ? ev.detalle : ev.detalle || 'No se encontró en la base'}
+                      </p>
+                      {ev.fecha && <p className="text-xs text-slate-400">{fecha(ev.fecha)}</p>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {data.lead && (
+              <div className="border-t border-slate-200 pt-4 text-sm">
+                <p className="text-slate-500">Cómo está el lead ahora</p>
+                <p className="mt-1 text-slate-900">
+                  <span className="font-medium">{data.lead.nombre}</span> #{data.lead.id} · {data.lead.modelo || 'sin modelo'}
+                </p>
+                <p className="text-slate-600">Estado: {data.lead.estado} · Vendedor: {data.lead.vendedor || 'sin asignar'}</p>
+                {onAbrirLead && (
+                  <button
+                    onClick={() => onAbrirLead(data.lead!.id)}
+                    className="mt-3 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    Abrir historial del lead
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

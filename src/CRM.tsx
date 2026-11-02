@@ -6196,7 +6196,15 @@ const getProgresoMes = (vendedor_id: number) => {
 )}
     {/* Agente IA */}
 {activeSection === "agente" && (isOwner() || ["director", "gerente"].includes(currentUser?.role)) && (
-  <AgentInbox currentUser={currentUser} />
+  <AgentInbox
+    currentUser={currentUser}
+    onAbrirLead={(id: number) => {
+      const lead = leads.find((l) => l.id === id);
+      if (!lead) return false;
+      openHistorialModal(lead);
+      return true;
+    }}
+  />
 )}
     {/* Sección Presupuestos */}
 {activeSection === "presupuestos" && (
