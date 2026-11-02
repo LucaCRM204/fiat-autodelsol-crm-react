@@ -26,6 +26,7 @@ import {
   RefreshCw,
   UserPlus,
   MessageCircle,
+  Bot,
 } from "lucide-react";
 import { api } from "./api";
 import WhatsAppAdminFiat from "./components/WhatsAppAdminFiat";
@@ -54,6 +55,7 @@ import WhatsAppChat from './components/WhatsAppChat';
 import WhatsAppPanel from './components/WhatsAppPanel';
 import LeadDistribution from './components/DistribucionLeads';
 import CallPanel from './components/CallPanel';
+import AgentInbox from './components/AgentInbox';
 import {
   listMetas,
   createMeta as apiCreateMeta,
@@ -376,7 +378,7 @@ export default function CRM() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [_socket, _setSocket] = useState<Socket | null>(null);
   const [activeSection, setActiveSection] = useState<
-  "dashboard" | "leads" | "calendar" | "ranking" | "users" | "alerts" | "team" | "presupuestos" | "tareas" | "analytics" | "metas" | "asignar_tareas" | "whatsapp" | "whatsapp_admin"
+  "dashboard" | "leads" | "calendar" | "ranking" | "users" | "alerts" | "team" | "presupuestos" | "tareas" | "analytics" | "metas" | "asignar_tareas" | "whatsapp" | "whatsapp_admin" | "agente"
 >("dashboard");
   const [loginError, setLoginError] = useState("");
   const [selectedEstado, setSelectedEstado] = useState<string | null>(null);
@@ -2637,6 +2639,9 @@ const getProgresoMes = (vendedor_id: number) => {
       : []),
     ...((isOwner() || ["director", "gerente"].includes(currentUser?.role))
       ? [{ key: "whatsapp_admin", label: "WhatsApp Admin", Icon: MessageCircle }]
+      : []),
+    ...((isOwner() || ["director", "gerente"].includes(currentUser?.role))
+      ? [{ key: "agente", label: "Agente IA", Icon: Bot }]
       : []),
   ];
   })().map(({ key, label, Icon, badge }) => (
@@ -6188,6 +6193,10 @@ const getProgresoMes = (vendedor_id: number) => {
       title="WhatsApp Admin — Auto del Sol Fiat"
     />
   </div>
+)}
+    {/* Agente IA */}
+{activeSection === "agente" && (isOwner() || ["director", "gerente"].includes(currentUser?.role)) && (
+  <AgentInbox currentUser={currentUser} />
 )}
     {/* Sección Presupuestos */}
 {activeSection === "presupuestos" && (
