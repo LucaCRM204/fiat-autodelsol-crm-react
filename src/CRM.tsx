@@ -554,7 +554,10 @@ const [equipoDestinoReasignacion, setEquipoDestinoReasignacion] = useState<strin
       setLeads(prev => prev.filter(l => l.id !== leadId));
     },
     onNotification: (n: any) => {
-      if (!n?.targetUserId || n.targetUserId === currentUser?.id) cargarAlertas();
+      if (!n?.targetUserId || n.targetUserId === currentUser?.id) {
+        cargarAlertas();
+        cargarTareas();
+      }
     },
   });
 
@@ -1581,35 +1584,82 @@ useEffect(() => {
     }));
     
     setTareasPendientes(prev => {
-      // Mantener solo tareas manuales
-      const tareasManules = prev.filter(t => t.manual);
+      // Mantener las tareas asignadas (vienen del backend) con el lead actualizado
+      const tareasManules = prev
+        .filter(t => t.manual)
+        .map(t => ({ ...t, lead: leads.find(l => l.id === t.leadId) || t.lead }));
       return [...tareasManules, ...tareasAutomaticas];
     });
   }
 }, [leads, currentUser]);
 
-const completarTarea = (tareaId: number) => {
-  const tarea = tareasPendientes.find(t => t.id === tareaId);
-  
-  // Solo el vendedor asignado o quien la creó puede completarla
-  if (tarea && (tarea.asignadoA === currentUser?.id || tarea.createdBy === currentUser?.id)) {
-    setTareasPendientes(prev =>
-      prev.map(t => t.id === tareaId ? { ...t, completada: true } : t)
-    );
-    
-    // Notificar al creador si no es el mismo que la completa
-    if (tarea.createdBy && tarea.createdBy !== currentUser?.id && tarea.asignadoA === currentUser?.id) {
-      pushAlert(
-        tarea.createdBy,
-        'lead_assigned',
-        `✅ ${currentUser?.name} completó la tarea: ${tarea.descripcion.substring(0, 50)}...`
-      );
-    }
-  } else {
-    alert('No tienes permiso para completar esta tarea');
+// ===== Tareas asignadas: viven en el backend (/api/tareas) =====
+const mapTareaApi = (t: any): TareaSeguimiento => ({
+  id: t.id,
+  leadId: t.lead_id,
+  asignadoA: t.asignado_a,
+  tipo: t.tipo,
+  prioridad: t.prioridad,
+  fechaLimite: t.fecha_limite,
+  descripcion: t.descripcion,
+  completada: !!t.completada,
+  manual: true,
+  createdBy: t.created_by,
+  createdByName: t.creador_nombre || undefined,
+  lead: leads.find((l) => l.id === t.lead_id) || ({
+    id: t.lead_id,
+    nombre: t.lead_nombre,
+    telefono: t.lead_telefono,
+    modelo: t.lead_modelo,
+    estado: t.lead_estado,
+    vendedor: t.lead_vendedor,
+  } as any),
+});
+
+const cargarTareas = async () => {
+  try {
+    const res = await api.get("/tareas");
+    const manuales = (res.data.tareas || []).map(mapTareaApi);
+    setTareasPendientes((prev) => [...manuales, ...prev.filter((t) => !t.manual)]);
+  } catch (e) {
+    console.error("Error cargando tareas:", e);
   }
 };
-const handleAsignarTareaAVendedor = () => {
+
+useEffect(() => {
+  if (!currentUser?.id) return;
+  cargarTareas();
+  const t = setInterval(cargarTareas, 60 * 1000);
+  return () => clearInterval(t);
+}, [currentUser?.id]);
+
+const completarTarea = async (tareaId: number) => {
+  const tarea = tareasPendientes.find(t => t.manual && t.id === tareaId);
+  if (!tarea) return;
+  setTareasPendientes(prev =>
+    prev.map(t => (t.manual && t.id === tareaId ? { ...t, completada: true } : t))
+  );
+  try {
+    // El backend valida el permiso y le avisa a quien la asignó
+    await api.put(`/tareas/${tareaId}/completar`);
+  } catch (e: any) {
+    setTareasPendientes(prev =>
+      prev.map(t => (t.manual && t.id === tareaId ? { ...t, completada: false } : t))
+    );
+    alert(e?.response?.data?.error || 'No se pudo completar la tarea');
+  }
+};
+
+const eliminarTareaAsignada = async (tareaId: number) => {
+  if (!confirm('¿Eliminar esta tarea?')) return;
+  try {
+    await api.delete(`/tareas/${tareaId}`);
+    setTareasPendientes(prev => prev.filter(t => !(t.manual && t.id === tareaId)));
+  } catch (e: any) {
+    alert(e?.response?.data?.error || 'No se pudo eliminar la tarea');
+  }
+};
+const handleAsignarTareaAVendedor = async () => {
   if (!leadParaAsignarTarea || !vendedorSeleccionadoTarea) {
     alert('Por favor selecciona un vendedor');
     return;
@@ -1629,28 +1679,22 @@ const handleAsignarTareaAVendedor = () => {
   const fechaHoraISO = `${fechaLimite}T${horaLimite}:00`;
   const vendedor = userById.get(vendedorSeleccionadoTarea);
 
-  const nuevaTarea: TareaSeguimiento = {
-    id: Date.now(),
-    leadId: leadParaAsignarTarea.id,
-    asignadoA: vendedorSeleccionadoTarea,
-    tipo,
-    prioridad,
-    fechaLimite: fechaHoraISO,
-    descripcion,
-    completada: false,
-    lead: leadParaAsignarTarea,
-    manual: true,
-    createdBy: currentUser?.id,
-    createdByName: currentUser?.name
-  };
-
-  setTareasPendientes(prev => [...prev, nuevaTarea]);
-
-  pushAlert(
-    vendedorSeleccionadoTarea,
-    'lead_assigned',
-    `📋 Nueva tarea asignada por ${currentUser?.name}: ${descripcion.substring(0, 50)}...`
-  );
+  try {
+    // El backend la guarda y le manda la alerta al vendedor
+    const res = await api.post('/tareas', {
+      leadId: leadParaAsignarTarea.id,
+      asignadoA: vendedorSeleccionadoTarea,
+      tipo,
+      prioridad,
+      fechaLimite: fechaHoraISO,
+      descripcion,
+    });
+    const nueva = mapTareaApi(res.data.tarea);
+    setTareasPendientes(prev => [nueva, ...prev]);
+  } catch (e: any) {
+    alert(e?.response?.data?.error || 'No se pudo asignar la tarea');
+    return;
+  }
 
   guardarNotaAuto(leadParaAsignarTarea.id, `📋 ${currentUser?.name} asignó tarea a ${vendedor?.name}: ${descripcion}`);
 
@@ -5602,11 +5646,7 @@ const getProgresoMes = (vendedor_id: number) => {
                       </td>
                       <td className="px-6 py-4 text-center">
                         <button
-                          onClick={() => {
-                            if (confirm('¿Eliminar esta tarea?')) {
-                              setTareasPendientes(prev => prev.filter(t => t.id !== tarea.id));
-                            }
-                          }}
+                          onClick={() => eliminarTareaAsignada(tarea.id)}
                           className="p-1 text-red-600 hover:text-red-800"
                           title="Eliminar tarea"
                         >
