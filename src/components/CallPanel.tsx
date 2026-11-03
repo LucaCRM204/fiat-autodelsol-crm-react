@@ -51,7 +51,8 @@ export default function CallPanel({ lead, onClose, onCallSaved, apiUrl, token }:
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
       
-      await fetch(`${apiUrl}/api/calls`, {
+      // VITE_API_URL ya termina en /api: antes quedaba /api/api/calls (404 silencioso)
+      const res = await fetch(`${apiUrl}/calls`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -62,6 +63,8 @@ export default function CallPanel({ lead, onClose, onCallSaved, apiUrl, token }:
           notas
         })
       });
+      // fetch no tira error con 4xx/5xx: si no se guardó, el panel queda abierto
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       onCallSaved?.();
       onClose();
     } catch (err) {
