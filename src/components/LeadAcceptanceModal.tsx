@@ -11,6 +11,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Bell, Check, X, Clock } from 'lucide-react';
 
+// URL del backend (VITE_API_URL ya termina en /api, igual que en api.ts).
+// Antes se usaban URLs relativas (/api/leads/...), que iban al dominio del
+// frontend y no al backend.
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3001/api').replace(/\/$/, '');
+
 interface LeadOffer {
   leadId: number;
   expiresAt: string;
@@ -120,7 +125,7 @@ export function LeadAcceptanceModal({ socket, onAccepted, onRejected }: LeadAcce
     
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/leads/${offer.leadId}/accept`, {
+      const response = await fetch(`${API_URL}/leads/${offer.leadId}/accept`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -151,7 +156,7 @@ export function LeadAcceptanceModal({ socket, onAccepted, onRejected }: LeadAcce
     
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/leads/${offer.leadId}/reject`, {
+      const response = await fetch(`${API_URL}/leads/${offer.leadId}/reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

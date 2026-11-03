@@ -12,10 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-// ⚙️ AJUSTAR 1: la URL del backend.
-// Vite  -> import.meta.env.VITE_API_URL
-// CRA   -> process.env.REACT_APP_API_URL
-const API_URL = import.meta.env.VITE_API_URL ?? '';
+// URL del backend: VITE_API_URL ya termina en /api (igual que en api.ts).
+// Antes se armaba `${VITE_API_URL}/api/distribution` -> /api/api/distribution (404).
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3001/api').replace(/\/$/, '');
 
 // ⚙️ AJUSTAR 2: como se llama el token en localStorage.
 // Miralo en DevTools -> Application -> Local Storage.
@@ -74,7 +73,7 @@ export default function DistribucionLeads() {
   );
 
   async function pedir(ruta: string, opciones: RequestInit = {}) {
-    const r = await fetch(`${API_URL}/api/distribution${ruta}`, { ...opciones, headers });
+    const r = await fetch(`${API_URL}/distribution${ruta}`, { ...opciones, headers });
     if (r.status === 401 || r.status === 403) {
       throw new Error('Tu sesión venció o no tenés permiso para este equipo.');
     }
