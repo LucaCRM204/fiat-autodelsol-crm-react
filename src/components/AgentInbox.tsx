@@ -27,6 +27,7 @@ type Config = {
   tools_con_aprobacion: string[];
   whatsapp_automatico: boolean;
   max_acciones_corrida: number;
+  estados_protegidos: string[];
   instrucciones_extra: string;
 };
 
@@ -122,6 +123,18 @@ const DISPAROS: Record<string, string> = {
 
 const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
+const ESTADOS_LEAD: { key: string; label: string }[] = [
+  { key: 'nuevo', label: 'Nuevo' },
+  { key: 'contactado', label: 'Contactado' },
+  { key: 'interesado', label: 'Interesado' },
+  { key: 'negociacion', label: 'Negociación' },
+  { key: 'rellamado', label: 'Rellamado' },
+  { key: 'no_contesta_1', label: 'No contesta 1' },
+  { key: 'no_contesta_2', label: 'No contesta 2' },
+  { key: 'no_contesta_3', label: 'No contesta 3' },
+  { key: 'vendido', label: 'Vendido' },
+];
+
 const ESTADO_ACCION: Record<Accion['status'], { label: string; cls: string }> = {
   pending: { label: 'Para aprobar', cls: 'bg-amber-100 text-amber-800' },
   executed: { label: 'Hecha', cls: 'bg-emerald-100 text-emerald-800' },
@@ -141,8 +154,11 @@ function describir(a: Accion): string {
       return `Aviso a ${a.usuario_destino ?? `#${x.user_id}`}: ${x.mensaje ?? ''}`;
     case 'update_lead_estado':
       return `Pasar a “${x.estado}”${a.lead_estado ? ` (hoy: ${a.lead_estado})` : ''}. ${x.motivo ?? ''}`;
-    case 'reassign_lead':
-      return `Reasignar de ${a.vendedor_nombre ?? 'sin vendedor'} a ${a.usuario_destino ?? `#${x.to_user_id}`}. ${x.motivo ?? ''}`;
+    case 'reassign_lead': {
+      const destino = a.result?.a || a.usuario_destino || 'el próximo vendedor del equipo (round robin)';
+      const origen = a.result?.de || a.vendedor_nombre || 'sin vendedor';
+      return `Reasignar de ${origen} a ${destino}. ${x.motivo ?? ''}`;
+    }
     case 'send_whatsapp':
       return `WhatsApp al cliente: “${x.mensaje ?? ''}”`;
     default:
@@ -588,6 +604,8 @@ function Ajustes({ config, onGuardado }: { config: Config; onGuardado: (msg: str
   const set = <K extends keyof Config>(k: K, v: Config[K]) => setF((x) => ({ ...x, [k]: v }));
   const toggleDia = (d: number) =>
     set('dias_laborales', f.dias_laborales.includes(d) ? f.dias_laborales.filter((x) => x !== d) : [...f.dias_laborales, d].sort());
+  const toggleProtegido = (e: string) =>
+    set('estados_protegidos', f.estados_protegidos.includes(e) ? f.estados_protegidos.filter((x) => x !== e) : [...f.estados_protegidos, e]);
   const toggleTool = (t: string) =>
     set('tools_con_aprobacion', f.tools_con_aprobacion.includes(t) ? f.tools_con_aprobacion.filter((x) => x !== t) : [...f.tools_con_aprobacion, t]);
 
@@ -601,6 +619,7 @@ function Ajustes({ config, onGuardado }: { config: Config; onGuardado: (msg: str
         ...f,
         dias_laborales: f.dias_laborales.join(','),
         tools_con_aprobacion: f.tools_con_aprobacion.join(','),
+        estados_protegidos: f.estados_protegidos.join(','),
       });
       onGuardado('Ajustes guardados');
     } catch (e: any) {
@@ -670,6 +689,21 @@ function Ajustes({ config, onGuardado }: { config: Config; onGuardado: (msg: str
             </span>
           </span>
         </label>
+      </fieldset>
+
+      <fieldset>
+        <legend className="text-sm font-semibold text-slate-900">Estados que el agente no toca</legend>
+        <p className="mt-1 text-xs text-slate-500">
+          Leads en estos estados quedan fuera del agente: no les deja notas ni recordatorios, no los reasigna, no les cambia el estado ni les manda WhatsApp.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {ESTADOS_LEAD.map((e) => (
+            <label key={e.key} className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 px-3 py-1.5 text-sm">
+              <input type="checkbox" checked={(f.estados_protegidos || []).includes(e.key)} onChange={() => toggleProtegido(e.key)} className="accent-blue-600" />
+              {e.label}
+            </label>
+          ))}
+        </div>
       </fieldset>
 
       <div className="grid gap-5 sm:grid-cols-2">
